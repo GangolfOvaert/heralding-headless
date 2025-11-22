@@ -17,105 +17,57 @@ import os
 import csv
 import logging
 import json
+import requests
 
 from heralding.reporting.base_logger import BaseLogger
 
 logger = logging.getLogger(__name__)
 
+# --- CONFIGURATION ---
+# Change this to the IP/URL of your second server
+REMOTE_SERVER_URL = "http://127.0.0.1:5000/api/logs" 
+# Optional: Add a token if your receiver requires it
+REMOTE_AUTH_TOKEN = "your-secret-token" 
+# ---------------------
 
 class FileLogger(BaseLogger):
 
   def __init__(self, session_csv_logfile, sessions_json_logfile, auth_logfile):
     super().__init__()
-
-    self.auth_log_filehandler = None
-    self.auth_log_writer = None
-    self.session_csv_log_filehandler = None
-    self.session_csv_log_writer = None
-    self.session_json_log_filehandler = None
-
-    if auth_logfile != "":
-      # Setup CSV logging for auth attempts
-      auth_field_names = [
-          'timestamp', 'auth_id', 'session_id', 'source_ip', 'source_port',
-          'destination_ip', 'destination_port', 'protocol', 'username',
-          'password', 'password_hash'
-      ]
-
-      self.auth_log_filehandler, self.auth_log_writer = self.setup_csv_files(
-          auth_logfile, auth_field_names)
-
-      logger.info(
-          'File logger: Using %s to log authentication attempts in CSV format.',
-          auth_logfile)
-
-    if session_csv_logfile != "":
-      # Setup CSV logging for sessions
-      session_field_names = [
-          'timestamp', 'duration', 'session_id', 'source_ip', 'source_port',
-          'destination_ip', 'destination_port', 'protocol', 'num_auth_attempts'
-      ]
-      self.session_csv_log_filehandler, self.session_csv_log_writer = self.setup_csv_files(
-          session_csv_logfile, session_field_names)
-
-      logger.info(
-          'File logger: Using %s to log unified session data in CSV format.',
-          session_csv_logfile)
-
-    if sessions_json_logfile != "":
-      # Setup json logging for logging complete sessions
-      if not os.path.isfile(sessions_json_logfile):
-        self.session_json_log_filehandler = open(
-            sessions_json_logfile, 'w', encoding='utf-8')
-      else:
-        self.session_json_log_filehandler = open(
-            sessions_json_logfile, 'a', encoding='utf-8')
-
-      logger.info(
-          'File logger: Using %s to log complete session data in JSON format.',
-          sessions_json_logfile)
+    # We override the file logger to ignore local files and send data remotely.
+    logger.info('Remote Logger initialized. Sending data to %s', REMOTE_SERVER_URL)
 
   def setup_csv_files(self, filename, field_names):
-    handler = writer = None
-
-    if not os.path.isfile(filename):
-      handler = open(filename, 'w', encoding='utf-8')
-    else:
-      handler = open(filename, 'a', encoding='utf-8')
-
-    writer = csv.DictWriter(
-        handler, fieldnames=field_names, extrasaction='ignore')
-
-    # empty file, write csv header
-    if os.path.getsize(filename) == 0:
-      writer.writeheader()
-      handler.flush()
-
-    return handler, writer
+    # Not used in headless remote mode
+    pass
 
   def loggerStopped(self):
-    for handler in [
-        self.auth_log_filehandler, self.session_csv_log_filehandler,
-        self.session_json_log_filehandler
-    ]:
-      if handler != None:
-        handler.flush()
-        handler.close()
+    # No file handles to close
+    pass
+
+  def _send_remote(self, log_type, data):
+    """Helper to send data to the remote server"""
+    try:
+        payload = {
+            "log_type": log_type,
+            "data": data
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {REMOTE_AUTH_TOKEN}"
+        }
+        # Use a short timeout to prevent the honeypot from hanging if the log server is down
+        requests.post(REMOTE_SERVER_URL, json=payload, headers=headers, timeout=3.0)
+    except Exception as e:
+        # Log to stderr/syslog so we know something is wrong, but don't crash
+        logger.error(f"Failed to send log to remote server: {e}")
 
   def handle_auth_log(self, data):
     # for now this logger only handles authentication attempts where we are able
     # to log both username and password
-    if self.auth_log_filehandler != None:
-      if 'username' in data and 'password' in data:
-        self.auth_log_writer.writerow(data)
-        # meh
-        self.auth_log_filehandler.flush()
+    if 'username' in data and 'password' in data:
+        self._send_remote("auth", data)
 
   def handle_session_log(self, data):
     if data['session_ended']:
-      if self.session_csv_log_filehandler != None:
-        self.session_csv_log_writer.writerow(data)
-        self.session_csv_log_filehandler.flush()
-      if self.session_json_log_filehandler != None:
-        self.session_json_log_filehandler.write(json.dumps(data) + "\n")
-        self.session_json_log_filehandler.flush()
+        self._send_remote("session", data)
