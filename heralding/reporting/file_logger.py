@@ -24,10 +24,11 @@ from heralding.reporting.base_logger import BaseLogger
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ---
-# Change this to the IP/URL of your second server
-REMOTE_SERVER_URL = "http://127.0.0.1:5000/api/logs" 
-# Optional: Add a token if your receiver requires it
-REMOTE_AUTH_TOKEN = "your-secret-token" 
+target_host = os.environ.get('LOG_TARGET_HOST')
+target_port = os.environ.get('LOG_TARGET_PORT')
+REMOTE_SERVER_URL = f"http://{target_host}:{target_port}/api/logs"
+
+REMOTE_AUTH_TOKEN = os.environ.get('API_KEY')
 # ---------------------
 
 class FileLogger(BaseLogger):
